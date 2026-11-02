@@ -1,0 +1,38 @@
+[project]
+name = "walls"
+version = "0.1.0"
+description = "A log of the walls agents hit: every manual action they had to ask a human for"
+requires-python = ">=3.12"
+dependencies = [
+    "mcp>=2.3,<3",
+    "httpx>=0.27",
+    "psycopg[binary]>=3.2",
+    "pgvector>=0.3",
+    "pydantic>=2",
+    "starlette>=0.46",
+    "uvicorn>=0.34",
+]
+
+[project.scripts]
+walls = "walls.cli:main"
+
+[dependency-groups]
+dev = ["pytest>=8", "pytest-asyncio>=0.24", "ruff>=0.6"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/walls"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "session"
+asyncio_default_test_loop_scope = "session"
+
+[tool.ruff]
+line-length = 100
+
+[tool.ruff.lint]
+extend-select = ["I", "UP", "B"]

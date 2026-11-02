@@ -1,0 +1,35 @@
+# walls on the server, at /opt/walls.
+#
+# `./deploy.sh walls` writes app.env from the deploy config's
+# secret pointers, ships this file, then pulls and recreates
+# the service. /opt/walls/.env names the image:
+#   APP_IMAGE=ghcr.io/madelinecameron/walls:sha-<short>
+#
+# Host networking because the server binds 127.0.0.1:8797 and the host's
+# tailscaled serves it on the tailnet, and because Postgres and LiteLLM are
+# reached over the LAN from the host.
+
+name: walls
+
+services:
+  walls:
+    image: ${APP_IMAGE:?set APP_IMAGE in .env next to this file}
+    restart: unless-stopped
+    network_mode: host
+    env_file:
+      - path: app.env
+        required: false
+    environment:
+      WALLS_HOST: 127.0.0.1
+      WALLS_PORT: "8797"
+      WALLS_LITELLM_URL: http://127.0.0.1:4000
+      WALLS_MAILBOX_URL: https://mailbox.example.ts.net
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request as u; u.urlopen('http://127.0.0.1:8797/healthz', timeout=4)"
+      interval: 30s
+      timeout: 5s
+      retries: 3
