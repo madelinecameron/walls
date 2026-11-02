@@ -48,7 +48,8 @@ The service sends one `DIGEST` to `WALLS_DIGEST_TO` from Monday 07:00 America/Ne
 the ranking. A model writes a suggested fix only for a wall seen at least 3 times in 30 days, and
 again only after the wall has doubled.
 
-Preview it without sending: `walls digest-preview`.
+Preview it without sending: `walls digest-preview`. Mailbox's relay decides where mail to
+`human:owner` shows up in Discord.
 
 ## Develop
 

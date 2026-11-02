@@ -98,7 +98,7 @@ def compose(data: dict[str, Any]) -> dict[str, Any]:
     counts = data["counts"]
     subject = (
         f"Walls: {counts['open_walls']} open, {counts['new_walls']} new, "
-        f"{counts['occurrences']} reports this week"
+        f"{counts['occurrences']} report{'' if counts['occurrences'] == 1 else 's'} this week"
     )
     heads_up = []
     if counts["occurrences"] == 0:

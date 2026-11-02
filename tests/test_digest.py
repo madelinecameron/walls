@@ -124,6 +124,12 @@ async def test_every_item_fits_mailbox_limits(db, ai, settings):
     assert all(len(item.encode()) <= digest.ITEM_LIMIT for item in body["needs_you"])
 
 
+async def test_subject_counts_one_report_in_the_singular(db, ai, settings):
+    await seed(db, ai, settings, 1)
+    body = digest.compose(await digest.collect(db, settings, NOW))
+    assert body["subject"] == "Walls: 1 open, 1 new, 1 report this week"
+
+
 async def test_a_quiet_week_says_so(db, ai, settings):
     await seed(db, ai, settings, 1)
     later = NOW + timedelta(days=14)
