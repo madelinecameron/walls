@@ -65,35 +65,47 @@ async def _place(
     conn: Connection, report: Report, embedding: list[float], settings: Settings, now: datetime
 ) -> Placement:
     """Find the wall this report belongs to, or make one. Holds a lock until commit, so two
-    reports of the same new wall arriving together cannot each create it."""
+    reports of the same new wall arriving together cannot each create it.
+
+    Only a wall on the same system attaches automatically. Across systems, similarity cannot
+    tell a duplicate from a look-alike (GitHub and GitLab approvals score like paraphrases), so
+    those go to review. A merged wall still matches, and its report goes to the merge target,
+    so the same wording does not come back as a new wall after a merge."""
     await conn.execute(LOCK)
     vector = Vector(embedding)
+    params = {
+        "v": vector,
+        "system": report.system,
+        "judgment": JUDGMENT,
+        "is_judgment": report.blocker_type == JUDGMENT,
+    }
     cur = await conn.execute(
         """
-        SELECT id, status, 1 - (embedding <=> %(v)s) AS score
+        SELECT id, merged_into_id, 1 - (embedding <=> %(v)s) AS score
+          FROM walls
+         WHERE system = %(system)s
+           AND (blocker_type = %(judgment)s) = %(is_judgment)s
+         ORDER BY embedding <=> %(v)s
+         LIMIT 1
+        """,
+        params,
+    )
+    same_system = await cur.fetchone()
+    if same_system and same_system["score"] >= settings.match_threshold:
+        return await _attach(conn, same_system)
+
+    cur = await conn.execute(
+        """
+        SELECT id, 1 - (embedding <=> %(v)s) AS score
           FROM walls
          WHERE merged_into_id IS NULL
            AND (blocker_type = %(judgment)s) = %(is_judgment)s
          ORDER BY embedding <=> %(v)s
          LIMIT 3
         """,
-        {"v": vector, "judgment": JUDGMENT, "is_judgment": report.blocker_type == JUDGMENT},
+        params,
     )
     nearest = await cur.fetchall()
-
-    if nearest and nearest[0]["score"] >= settings.match_threshold:
-        match = nearest[0]
-        reopened = match["status"] == "resolved"
-        if reopened:
-            await conn.execute(
-                """
-                UPDATE walls SET status = 'open', reopened_count = reopened_count + 1
-                 WHERE id = %s
-                """,
-                (match["id"],),
-            )
-        return Placement(match["id"], False, reopened, match["score"])
-
     cur = await conn.execute(
         """
         INSERT INTO walls (action_needed, system, blocker_type, embedding, created_at)
@@ -109,6 +121,25 @@ async def _place(
                 (wall_id, row["id"], row["score"]),
             )
     return Placement(wall_id, True, False, nearest[0]["score"] if nearest else None)
+
+
+async def _attach(conn: Connection, match: dict[str, Any]) -> Placement:
+    wall_id = match["id"]
+    target = match["merged_into_id"]
+    while target is not None:
+        wall_id = target
+        cur = await conn.execute("SELECT merged_into_id FROM walls WHERE id = %s", (wall_id,))
+        target = (await cur.fetchone())["merged_into_id"]
+    cur = await conn.execute(
+        """
+        UPDATE walls SET status = 'open', reopened_count = reopened_count + 1
+         WHERE id = %s AND status = 'resolved'
+        RETURNING id
+        """,
+        (wall_id,),
+    )
+    reopened = await cur.fetchone() is not None
+    return Placement(wall_id, False, reopened, match["score"])
 
 
 async def _insert_occurrence(

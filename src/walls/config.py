@@ -11,13 +11,13 @@ class Settings:
     database_url: str = ""
     litellm_url: str = ""
     litellm_key: str = ""
-    embedding_model: str = "openai/text-embedding-3-small"
+    embedding_model: str = "personal/text-embedding-3-small"
     remedy_model: str = "balanced"
     mailbox_url: str = ""
     mailbox_key: str = ""
     digest_to: str = "human:owner"
     match_threshold: float = 0.72
-    review_threshold: float = 0.55
+    review_threshold: float = 0.65
     remedy_min_occurrences: int = 3
     remedy_limit: int = 10
     digest_top: int = 5

@@ -63,6 +63,42 @@ async def test_similar_report_makes_a_new_wall_and_a_review(db, ai, settings):
     ]
 
 
+async def test_identical_wording_on_another_system_goes_to_review_not_attach(db, ai, settings):
+    first = await store.report_wall(db, ai, settings, vault(system="github"), NOW)
+    second = await store.report_wall(db, ai, settings, vault(system="gitlab"), NOW)
+
+    assert second["new_wall"] is True and second["wall_id"] != first["wall_id"]
+    async with db.connect() as conn:
+        reviews = await store.pending_reviews(conn)
+    assert [(r["wall_id"], r["similar_id"]) for r in reviews] == [
+        (second["wall_id"], first["wall_id"])
+    ]
+
+
+async def test_merge_across_systems_catches_later_reports_from_both(db, ai, settings):
+    first = await store.report_wall(db, ai, settings, vault(system="xcode"), NOW)
+    second = await store.report_wall(db, ai, settings, vault(system="ios"), NOW)
+    async with db.connect() as conn:
+        await store.merge_walls(conn, second["wall_id"], first["wall_id"], NOW)
+
+    again = await store.report_wall(db, ai, settings, vault(system="ios"), NOW)
+
+    assert again["wall_id"] == first["wall_id"] and again["times_seen"] == 3
+
+
+async def test_merge_chain_lands_on_the_last_wall(db, ai, settings):
+    a = await store.report_wall(db, ai, settings, vault(system="one"), NOW)
+    b = await store.report_wall(db, ai, settings, vault(system="two"), NOW)
+    c = await store.report_wall(db, ai, settings, vault(system="three"), NOW)
+    async with db.connect() as conn:
+        await store.merge_walls(conn, a["wall_id"], b["wall_id"], NOW)
+        await store.merge_walls(conn, b["wall_id"], c["wall_id"], NOW)
+
+    again = await store.report_wall(db, ai, settings, vault(system="one"), NOW)
+
+    assert again["wall_id"] == c["wall_id"]
+
+
 async def test_merge_moves_occurrences_and_closes_the_review(db, ai, settings):
     first = await store.report_wall(db, ai, settings, vault(), NOW)
     near = vault(action_needed="Rotate the Vault token and restart core services")
@@ -76,7 +112,7 @@ async def test_merge_moves_occurrences_and_closes_the_review(db, ai, settings):
     assert [w["id"] for w in top] == [first["wall_id"]]
 
     again = await store.report_wall(db, ai, settings, near, NOW)
-    assert again["wall_id"] != second["wall_id"]
+    assert again["wall_id"] == first["wall_id"] and again["new_wall"] is False
 
 
 async def test_merged_wall_cannot_be_used_again(db, ai, settings):

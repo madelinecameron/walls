@@ -23,11 +23,16 @@ Mailbox `DIGEST`.
 The server scrubs anything that looks like a secret, then embeds `system: action_needed` with
 `text-embedding-3-small` and compares it to every wall by cosine similarity.
 
-| Similarity to the closest wall | Result |
+| Closest wall | Result |
 |---|---|
-| At or above `WALLS_MATCH_THRESHOLD` | Attaches to that wall as an occurrence. |
-| At or above `WALLS_REVIEW_THRESHOLD` | New wall, plus a pair in `walls_review`. |
+| Same `system`, at or above `WALLS_MATCH_THRESHOLD` (0.72) | Attaches as an occurrence. |
+| Any `system`, at or above `WALLS_REVIEW_THRESHOLD` (0.65) | New wall, plus a pair in `walls_review`. |
 | Below both | New wall. |
+
+Only a wall on the same `system` attaches automatically. With real embeddings, walls on different
+systems can score as high as true duplicates: "approve the pull request" on GitHub and "approve the
+merge request" on GitLab scored 0.79, higher than many true paraphrases. These values come from 28
+hand-written pairs, so check them against real walls with `walls_review` and adjust.
 
 Other rules:
 
@@ -35,6 +40,7 @@ Other rules:
   for the human is not friction to remove.
 - A repeat of the same wall in one MCP session within 6 hours is not counted again.
 - A report of a resolved wall reopens it, which shows the fix did not hold.
+- A merged wall still matches, and its reports go to the wall it was merged into.
 
 ## Weekly digest
 
