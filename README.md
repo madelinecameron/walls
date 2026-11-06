@@ -75,3 +75,18 @@ The service migrates its own schema on start. Provision the database once with
 `deploy/postgres.sql`.
 
 The server is reachable from the tailnet with no credential.
+
+### Tailnet name
+
+`walls.example.ts.net` is its own node, not a name on the server. A second userspace
+tailscaled on the server owns it:
+
+```sh
+cp deploy/tailscaled-walls.service /etc/systemd/system/
+systemctl enable --now tailscaled-walls
+tailscale --socket=/run/tailscale-walls.sock up --hostname=walls --advertise-tags=tag:server --accept-dns=false
+tailscale --socket=/run/tailscale-walls.sock serve --bg --https=443 http://127.0.0.1:8797
+```
+
+`up` prints a login URL to approve once. The serve rule persists in the node's
+state directory, so a redeploy of the container does not touch it.
