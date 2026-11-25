@@ -84,3 +84,12 @@ def test_mcp_url():
     assert Settings().mcp_url == "http://127.0.0.1:8797/mcp"
     assert Settings(host="0.0.0.0", port=80).mcp_url == "http://127.0.0.1:80/mcp"
     assert Settings(public_url="https://walls.example.com/mcp").mcp_url.startswith("https://")
+
+
+def test_auth_flag_reads_true_and_false(tmp_path):
+    assert Settings.load(env={}).auth is True
+    assert Settings.load(env={"WALLS_AUTH": "false"}).auth is False
+    off = write(tmp_path, "[server]\nauth = false\n")
+    assert Settings.load(off, env={}).auth is False
+    with pytest.raises(ConfigError, match="auth"):
+        Settings.load(env={"WALLS_AUTH": "maybe"})

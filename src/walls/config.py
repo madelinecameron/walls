@@ -18,6 +18,7 @@ FILE_KEYS: dict[str, tuple[str, str]] = {
     "port": ("server", "port"),
     "public_url": ("server", "public_url"),
     "allowed_hosts": ("server", "allowed_hosts"),
+    "auth": ("server", "auth"),
     "auth_token": ("server", "auth_token"),
     "llm_url": ("llm", "url"),
     "llm_key": ("llm", "key"),
@@ -47,6 +48,7 @@ class Settings:
     port: int = 8797
     public_url: str = ""
     allowed_hosts: list[str] = field(default_factory=lambda: ["127.0.0.1:*", "localhost:*"])
+    auth: bool = True
     auth_token: str = ""
     llm_url: str = ""
     llm_key: str = ""
@@ -140,6 +142,15 @@ def _read_file(path: Path) -> dict[str, Any]:
 
 def _coerce(name: str, value: Any, kind: Any) -> Any:
     try:
+        if kind is bool:
+            if isinstance(value, bool):
+                return value
+            flag = str(value).strip().lower()
+            if flag in ("true", "1", "yes", "on"):
+                return True
+            if flag in ("false", "0", "no", "off"):
+                return False
+            raise ValueError("expected true or false")
         if kind == list[str]:
             items = value.split(",") if isinstance(value, str) else value
             return [str(item).strip() for item in items if str(item).strip()]
