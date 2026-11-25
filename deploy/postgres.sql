@@ -1,4 +1,4 @@
--- Create the walls database and role on the shared Postgres. Run once
+-- Create the walls database and role on an existing Postgres cluster. Run once
 -- as the postgres superuser; running it again is harmless and resets the
 -- password to the given value. The password comes in as a psql variable on
 -- stdin, never on the command line:
@@ -17,8 +17,8 @@ WHERE NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'walls') \gexec
 
 ALTER ROLE walls LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE PASSWORD :'password';
 
--- template0 and UTF8 because the cluster was initdb'd as SQL_ASCII, and psycopg
--- returns bytes for text in a SQL_ASCII database.
+-- template0 and UTF8 so this also works on a cluster initdb'd as SQL_ASCII, where psycopg
+-- would return bytes for text.
 SELECT 'CREATE DATABASE walls OWNER walls TEMPLATE template0 ENCODING ''UTF8'' '
        'LC_COLLATE ''C.UTF-8'' LC_CTYPE ''C.UTF-8'''
 WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'walls') \gexec

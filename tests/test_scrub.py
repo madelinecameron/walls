@@ -30,7 +30,7 @@ def test_known_token_shapes_are_removed(secret):
     [
         ("postgres://walls:hunter2hunter@db.example.com/walls", "postgres://walls:"),
         ("Authorization: Bearer abcdefghij123456", "Bearer"),
-        ("WALLS_LITELLM_KEY=abcd1234 is wrong", None),
+        ("WALLS_LLM_KEY=abcd1234 is wrong", None),
         ("api_key: 'abcd1234'", "api_key"),
         ("password = correcthorse", "password"),
     ],
@@ -54,7 +54,7 @@ def test_private_key_block_is_removed_whole():
         "Rotate the Vault token",
         "Approve the secret-scan workflow in GitHub",
         "Grant the agent read access to secret/walls",
-        "https://walls.example.ts.net/mcp is unreachable",
+        "https://walls.example.com/mcp is unreachable",
     ],
 )
 def test_ordinary_sentences_about_secrets_are_left_alone(text):

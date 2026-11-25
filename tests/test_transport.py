@@ -1,18 +1,21 @@
 """The real HTTP transport, because three things exist only there: the client's name, the MCP
-session id, and the Host check that decides whether the tailnet name is accepted."""
+session id, the Host check, and the bearer token."""
 
 import asyncio
 import socket
+from dataclasses import replace
 
 import httpx
 import pytest
 import uvicorn
 from mcp import ClientSession
 from mcp.client.streamable_http import streamable_http_client
-from mcp.server.transport_security import TransportSecuritySettings
+from mcp.shared._httpx_utils import create_mcp_http_client
 from mcp.types import Implementation
 
-from walls.server import build_server
+from walls.server import build_server, http_app
+
+TOKEN = "test-token-0123456789"
 
 
 def free_port() -> int:
@@ -21,26 +24,39 @@ def free_port() -> int:
         return sock.getsockname()[1]
 
 
-@pytest.fixture
-async def url(db, ai, settings):
+async def start(db, ai, settings):
     port = free_port()
-    app = build_server(db, ai, settings).streamable_http_app(
-        transport_security=TransportSecuritySettings(
-            allowed_hosts=["walls.example.ts.net", "127.0.0.1:*"]
-        )
-    )
+    app = http_app(build_server(db, ai, settings), settings)
     server = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=port, log_level="warning"))
     task = asyncio.create_task(server.serve())
     while not server.started:
         await asyncio.sleep(0.01)
-    yield f"http://127.0.0.1:{port}"
+    return server, task, f"http://127.0.0.1:{port}"
+
+
+@pytest.fixture
+async def url(db, ai, settings):
+    hosts = ["walls.example.com", "127.0.0.1:*"]
+    server, task, address = await start(db, ai, replace(settings, allowed_hosts=hosts))
+    yield address
     server.should_exit = True
     await task
 
 
-async def report(url: str, client_name: str, times: int = 1) -> list:
+@pytest.fixture
+async def guarded_url(db, ai, settings):
+    server, task, address = await start(db, ai, replace(settings, auth_token=TOKEN))
+    yield address
+    server.should_exit = True
+    await task
+
+
+async def report(
+    url: str, client_name: str, times: int = 1, headers: dict[str, str] | None = None
+) -> list:
     results = []
-    async with streamable_http_client(f"{url}/mcp") as streams:
+    http = create_mcp_http_client(headers=headers)
+    async with http, streamable_http_client(f"{url}/mcp", http_client=http) as streams:
         info = Implementation(name=client_name, version="1")
         async with ClientSession(streams[0], streams[1], client_info=info) as session:
             await session.initialize()
@@ -90,7 +106,35 @@ async def test_healthz_and_host_check(url):
             f"{url}/mcp", json=initialize, headers={**accept, "Host": "evil.example"}
         )
         right = await http.post(
-            f"{url}/mcp", json=initialize, headers={**accept, "Host": "walls.example.ts.net"}
+            f"{url}/mcp", json=initialize, headers={**accept, "Host": "walls.example.com"}
         )
     assert wrong.status_code == 421
     assert right.status_code != 421
+
+
+PING = {"jsonrpc": "2.0", "id": 1, "method": "ping"}
+ACCEPT = {"Accept": "application/json, text/event-stream"}
+
+
+async def test_a_token_is_required_when_one_is_set(guarded_url):
+    async with httpx.AsyncClient() as http:
+        assert (await http.get(f"{guarded_url}/healthz")).status_code == 200
+        missing = await http.post(f"{guarded_url}/mcp", json=PING, headers=ACCEPT)
+        wrong = await http.post(
+            f"{guarded_url}/mcp", json=PING, headers={**ACCEPT, "Authorization": "Bearer nope"}
+        )
+    assert missing.status_code == 401
+    assert missing.headers["www-authenticate"] == "Bearer"
+    assert wrong.status_code == 401
+
+
+async def test_a_client_with_the_token_gets_through(guarded_url, db):
+    headers = {"Authorization": f"Bearer {TOKEN}"}
+    (result,) = await report(guarded_url, "claude-code", headers=headers)
+    assert result["status"] == "logged"
+
+
+async def test_no_token_means_no_check(url):
+    async with httpx.AsyncClient() as http:
+        response = await http.post(f"{url}/mcp", json=PING, headers=ACCEPT)
+    assert response.status_code != 401

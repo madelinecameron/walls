@@ -1,10 +1,12 @@
 import asyncio
+import hmac
 import logging
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from typing import Annotated, Any, Literal
 
 import httpx
+import uvicorn
 from mcp.server.mcpserver import Context, MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 from mcp.server.transport_security import TransportSecuritySettings
@@ -12,6 +14,7 @@ from mcp.types import ToolAnnotations
 from pydantic import Field
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
+from starlette.types import ASGIApp, Receive, Scope, Send
 
 from . import digest, store
 from .ai import AI
@@ -172,6 +175,36 @@ def build_server(db: Database, ai: AI, settings: Settings, lifespan: Any = None)
     return mcp
 
 
+class BearerAuth:
+    """Requires `Authorization: Bearer <token>` on every HTTP request except the health check."""
+
+    def __init__(self, app: ASGIApp, token: str) -> None:
+        self.app = app
+        self.expected = f"Bearer {token}".encode()
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] == "http" and scope["path"] != "/healthz":
+            given = dict(scope["headers"]).get(b"authorization", b"")
+            if not hmac.compare_digest(given, self.expected):
+                response = JSONResponse(
+                    {"error": "missing or wrong bearer token"},
+                    status_code=401,
+                    headers={"WWW-Authenticate": "Bearer"},
+                )
+                await response(scope, receive, send)
+                return
+        await self.app(scope, receive, send)
+
+
+def http_app(server: MCPServer, settings: Settings) -> ASGIApp:
+    hosts = settings.allowed_hosts
+    security = TransportSecuritySettings(
+        enable_dns_rebinding_protection="*" not in hosts, allowed_hosts=hosts
+    )
+    app = server.streamable_http_app(transport_security=security, host=settings.host)
+    return BearerAuth(app, settings.auth_token) if settings.auth_token else app
+
+
 async def tick_loop(db: Database, ai: AI, settings: Settings, http: httpx.AsyncClient) -> None:
     """Places reports queued while embeddings were down, and sends the weekly digest when due."""
     while True:
@@ -180,24 +213,24 @@ async def tick_loop(db: Database, ai: AI, settings: Settings, http: httpx.AsyncC
             placed = await store.sweep(db, ai, settings, now)
             if placed:
                 logger.info("placed %d queued reports", placed)
-            if settings.mailbox_key:
-                mail_id = await digest.run_if_due(db, ai, settings, http, now)
-                if mail_id:
-                    logger.info("sent digest %s", mail_id)
+            if settings.digest_enabled:
+                week = await digest.run_if_due(db, ai, settings, http, now)
+                if week:
+                    logger.info("sent digest for %s", week)
         except Exception:
             logger.exception("background tick failed")
         await asyncio.sleep(TICK_SECONDS)
 
 
 def serve(settings: Settings) -> None:
-    settings.require("database_url", "litellm_url", "litellm_key", "mailbox_url", "mailbox_key")
+    settings.require("database_url", "llm_url")
+    settings.check_digest()
+    if not settings.auth_token:
+        logger.warning("no auth_token set: anyone who can reach this server can use it")
+    if not settings.digest_enabled:
+        logger.info("no digest webhook_url set: the weekly digest is off")
     db = Database(settings.database_url)
-    ai = AI(
-        settings.litellm_url,
-        settings.litellm_key,
-        settings.embedding_model,
-        settings.remedy_model,
-    )
+    ai = AI(settings.llm_url, settings.llm_key, settings.embedding_model, settings.remedy_model)
 
     @asynccontextmanager
     async def lifespan(_: MCPServer) -> AsyncGenerator[None]:
@@ -211,9 +244,5 @@ def serve(settings: Settings) -> None:
             await http.aclose()
             await ai.aclose()
 
-    build_server(db, ai, settings, lifespan=lifespan).run(
-        "streamable-http",
-        host=settings.host,
-        port=settings.port,
-        transport_security=TransportSecuritySettings(allowed_hosts=settings.allowed_hosts),
-    )
+    app = http_app(build_server(db, ai, settings, lifespan=lifespan), settings)
+    uvicorn.run(app, host=settings.host, port=settings.port)

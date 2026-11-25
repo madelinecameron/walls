@@ -1,5 +1,5 @@
-"""The two model calls, both through LiteLLM: one embedding per report, and one structured
-suggestion per wall that recurs. Neither has tools, and a failure of either never loses data."""
+"""The two model calls, both to an OpenAI-compatible API: one embedding per report, and one
+structured suggestion per wall that recurs. Neither has tools, and a failure of either never loses data."""
 
 import json
 import logging
@@ -49,7 +49,7 @@ class AI:
         http: httpx.AsyncClient | None = None,
     ) -> None:
         self.base_url = base_url.rstrip("/")
-        self.headers = {"Authorization": f"Bearer {key}"}
+        self.headers = {"Authorization": f"Bearer {key}"} if key else {}
         self.embedding_model = embedding_model
         self.remedy_model = remedy_model
         self.http = http or httpx.AsyncClient()

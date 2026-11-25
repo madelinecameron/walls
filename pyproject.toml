@@ -2,6 +2,9 @@
 name = "walls"
 version = "0.1.0"
 description = "A log of the walls agents hit: every manual action they had to ask a human for"
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
 requires-python = ">=3.12"
 dependencies = [
     "mcp>=2.3,<3",
@@ -12,6 +15,9 @@ dependencies = [
     "starlette>=0.46",
     "uvicorn>=0.34",
 ]
+
+[project.urls]
+Repository = "https://github.com/madelinecameron/walls"
 
 [project.scripts]
 walls = "walls.cli:main"
