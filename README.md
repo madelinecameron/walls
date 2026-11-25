@@ -92,8 +92,8 @@ over the file. `walls init` writes a commented starter file.
 | `[llm] remedy_model` | `WALLS_REMEDY_MODEL` | `gpt-4.1-mini` |
 | `[matching] match_threshold` | `WALLS_MATCH_THRESHOLD` | `0.72` |
 | `[matching] review_threshold` | `WALLS_REVIEW_THRESHOLD` | `0.65` |
-| `[digest] mailbox_url` | `WALLS_MAILBOX_URL` | none: no digest |
-| `[digest] mailbox_key` | `WALLS_MAILBOX_KEY` | none |
+| `[digest] webhook_url` | `WALLS_DIGEST_WEBHOOK_URL` | none: no digest |
+| `[digest] webhook_token` | `WALLS_DIGEST_WEBHOOK_TOKEN` | none |
 | `[digest] to` | `WALLS_DIGEST_TO` | none |
 | `[digest] timezone` | `WALLS_TIMEZONE` | `UTC` |
 | `[digest] top` | `WALLS_DIGEST_TOP` | `5` |
@@ -140,15 +140,32 @@ millions.
 
 ## Weekly digest
 
-The digest is optional and off by default. To turn it on, set `mailbox_url`, `mailbox_key` and
-`to` together. Once a week, from Monday 07:00 in `timezone`, the server sends
-`POST <mailbox_url>/v1/messages` with `Authorization: Bearer <mailbox_key>` and a JSON body of
-`{"to": ["<to>"], "type": "DIGEST", "body": {...}}`. Anything that accepts that request can
-receive it. A script does the ranking. A model writes a
-suggested fix only for a wall seen at least `remedy_min_occurrences` times in `window_days`, and
-again only after the wall has doubled.
+The digest is optional and off by default. To turn it on, set `webhook_url`. Once a week, from
+Monday 07:00 in `timezone`, the server sends `POST <webhook_url>` with a JSON body:
 
-`walls digest-preview` prints this week's digest without sending it, with or without Mailbox.
+```json
+{
+  "type": "DIGEST",
+  "to": ["<to>"],
+  "body": {
+    "subject": "Walls: 4 open, 1 new, 9 reports this week",
+    "period": "since 2026-11-16",
+    "needs_you": ["#3 5x [credential] vault: Rotate the Vault token -> permission, small: ..."],
+    "handled": ["1 walls resolved this week."],
+    "heads_up": ["2 possible duplicates to review: ask for walls_review."]
+  }
+}
+```
+
+`to` is there only when set, and `handled` and `heads_up` only when they have lines. With
+`webhook_token` set, the request carries `Authorization: Bearer <webhook_token>`. Any 2xx response
+counts as sent; a `message_id` in a JSON response is recorded. A failed send is tried again on the
+next tick, so each week's digest goes out once.
+
+A script does the ranking. A model writes a suggested fix only for a wall seen at least
+`remedy_min_occurrences` times in `window_days`, and again only after the wall has doubled.
+
+`walls digest-preview` prints this week's digest without sending it.
 
 ## Develop
 

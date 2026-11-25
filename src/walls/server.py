@@ -214,9 +214,9 @@ async def tick_loop(db: Database, ai: AI, settings: Settings, http: httpx.AsyncC
             if placed:
                 logger.info("placed %d queued reports", placed)
             if settings.digest_enabled:
-                mail_id = await digest.run_if_due(db, ai, settings, http, now)
-                if mail_id:
-                    logger.info("sent digest %s", mail_id)
+                week = await digest.run_if_due(db, ai, settings, http, now)
+                if week:
+                    logger.info("sent digest for %s", week)
         except Exception:
             logger.exception("background tick failed")
         await asyncio.sleep(TICK_SECONDS)
@@ -228,7 +228,7 @@ def serve(settings: Settings) -> None:
     if not settings.auth_token:
         logger.warning("no auth_token set: anyone who can reach this server can use it")
     if not settings.digest_enabled:
-        logger.info("no Mailbox configured: the weekly digest is off")
+        logger.info("no digest webhook_url set: the weekly digest is off")
     db = Database(settings.database_url)
     ai = AI(settings.llm_url, settings.llm_key, settings.embedding_model, settings.remedy_model)
 

@@ -1,4 +1,5 @@
 import json
+from dataclasses import replace
 from datetime import timedelta
 
 import httpx
@@ -11,26 +12,31 @@ from walls import digest, store
 MONDAY_6AM = NOW.replace(hour=6)
 
 
-class FakeMailbox:
+class FakeWebhook:
     def __init__(self) -> None:
         self.sent: list[dict] = []
+        self.requests: list[httpx.Request] = []
         self.down = False
+        self.reply: dict | None = None
 
     def __call__(self, request: httpx.Request) -> httpx.Response:
         if self.down:
             return httpx.Response(503)
+        self.requests.append(request)
         self.sent.append(json.loads(request.content))
-        return httpx.Response(200, json={"message_id": f"m{len(self.sent)}"})
+        if self.reply is None:
+            return httpx.Response(204)
+        return httpx.Response(200, json=self.reply)
 
 
 @pytest.fixture
-def mailbox() -> FakeMailbox:
-    return FakeMailbox()
+def webhook() -> FakeWebhook:
+    return FakeWebhook()
 
 
 @pytest.fixture
-def http(mailbox: FakeMailbox) -> httpx.AsyncClient:
-    return httpx.AsyncClient(transport=httpx.MockTransport(mailbox))
+def http(webhook: FakeWebhook) -> httpx.AsyncClient:
+    return httpx.AsyncClient(transport=httpx.MockTransport(webhook))
 
 
 async def seed(db, ai, settings, times, **overrides):
@@ -38,37 +44,61 @@ async def seed(db, ai, settings, times, **overrides):
         await store.report_wall(db, ai, settings, vault(**overrides), NOW)
 
 
-async def test_sends_once_per_week_to_the_configured_address(db, ai, settings, mailbox, http):
+async def test_sends_once_per_week_to_the_webhook(db, ai, settings, webhook, http):
     await seed(db, ai, settings, 1)
 
-    assert await digest.run_if_due(db, ai, settings, http, NOW) == "m1"
+    assert await digest.run_if_due(db, ai, settings, http, NOW) == digest.week_key(NOW)
     assert await digest.run_if_due(db, ai, settings, http, NOW) is None
-    assert len(mailbox.sent) == 1
-    assert mailbox.sent[0]["to"] == [settings.digest_to]
-    assert mailbox.sent[0]["type"] == "DIGEST"
+    assert len(webhook.sent) == 1
+    request = webhook.requests[0]
+    assert str(request.url) == settings.digest_webhook_url
+    assert request.headers["authorization"] == "Bearer key"
+    assert webhook.sent[0]["to"] == [settings.digest_to]
+    assert webhook.sent[0]["type"] == "DIGEST"
 
-    assert await digest.run_if_due(db, ai, settings, http, NOW + timedelta(days=7)) == "m2"
+    later = NOW + timedelta(days=7)
+    assert await digest.run_if_due(db, ai, settings, http, later) == digest.week_key(later)
 
 
-async def test_not_before_monday_morning(db, ai, settings, mailbox, http):
+async def test_records_the_message_id_the_receiver_returns(db, ai, settings, webhook, http):
+    await seed(db, ai, settings, 1)
+    webhook.reply = {"message_id": "m1"}
+
+    await digest.run_if_due(db, ai, settings, http, NOW)
+
+    async with db.connect() as conn:
+        cur = await conn.execute("SELECT mail_id FROM digests")
+        assert (await cur.fetchone())["mail_id"] == "m1"
+
+
+async def test_token_and_recipient_are_optional(db, ai, settings, webhook, http):
+    await seed(db, ai, settings, 1)
+    bare = replace(settings, digest_webhook_token="", digest_to="")
+
+    assert await digest.run_if_due(db, ai, bare, http, NOW)
+    assert "authorization" not in webhook.requests[0].headers
+    assert "to" not in webhook.sent[0]
+
+
+async def test_not_before_monday_morning(db, ai, settings, webhook, http):
     await seed(db, ai, settings, 1)
     assert await digest.run_if_due(db, ai, settings, http, MONDAY_6AM) is None
-    assert mailbox.sent == []
+    assert webhook.sent == []
 
 
-async def test_nothing_is_sent_before_the_first_report(db, ai, settings, mailbox, http):
+async def test_nothing_is_sent_before_the_first_report(db, ai, settings, webhook, http):
     assert await digest.run_if_due(db, ai, settings, http, NOW) is None
-    assert mailbox.sent == []
+    assert webhook.sent == []
 
 
-async def test_a_failed_send_is_tried_again(db, ai, settings, mailbox, http):
+async def test_a_failed_send_is_tried_again(db, ai, settings, webhook, http):
     await seed(db, ai, settings, 1)
-    mailbox.down = True
+    webhook.down = True
     with pytest.raises(httpx.HTTPStatusError):
         await digest.run_if_due(db, ai, settings, http, NOW)
 
-    mailbox.down = False
-    assert await digest.run_if_due(db, ai, settings, http, NOW) == "m1"
+    webhook.down = False
+    assert await digest.run_if_due(db, ai, settings, http, NOW)
 
 
 async def test_only_recurring_walls_get_a_model_suggestion(db, ai, settings, litellm):
@@ -93,13 +123,13 @@ async def test_suggestion_is_rewritten_only_after_the_wall_doubles(db, ai, setti
 
 
 async def test_unusable_model_answer_does_not_stop_the_digest(
-    db, ai, settings, litellm, mailbox, http
+    db, ai, settings, litellm, webhook, http
 ):
     await seed(db, ai, settings, 3)
     litellm.remedy_answer = "I cannot help with that"
 
-    assert await digest.run_if_due(db, ai, settings, http, NOW) == "m1"
-    assert "->" not in mailbox.sent[0]["body"]["needs_you"][0]
+    assert await digest.run_if_due(db, ai, settings, http, NOW)
+    assert "->" not in webhook.sent[0]["body"]["needs_you"][0]
 
 
 async def test_digest_body_shows_rank_fix_and_flags(db, ai, settings):
@@ -118,7 +148,7 @@ async def test_digest_body_shows_rank_fix_and_flags(db, ai, settings):
     assert any("questions for you" in line for line in body["heads_up"])
 
 
-async def test_every_item_fits_mailbox_limits(db, ai, settings):
+async def test_every_item_fits_the_item_limit(db, ai, settings):
     await seed(db, ai, settings, 1, action_needed="é" * 500)
     body = digest.compose(await digest.collect(db, settings, NOW))
     assert all(len(item.encode()) <= digest.ITEM_LIMIT for item in body["needs_you"])

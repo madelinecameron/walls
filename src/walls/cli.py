@@ -40,10 +40,11 @@ match_threshold = 0.72
 review_threshold = 0.65
 
 [digest]
-# Optional. Set all three to send a weekly digest through Mailbox.
-# mailbox_url = "https://mailbox.example.com"
-# mailbox_key = "..."
-# to = "human:you"
+# Optional. Set webhook_url to POST a weekly digest as JSON. The token is sent as
+# "Authorization: Bearer <webhook_token>", and `to` is passed through as ["<to>"].
+# webhook_url = "https://hooks.example.com/walls"
+# webhook_token = "..."
+# to = "you@example.com"
 timezone = "UTC"
 top = 5
 window_days = 30

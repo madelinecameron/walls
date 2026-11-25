@@ -68,8 +68,9 @@ def settings() -> Settings:
     return Settings(
         match_threshold=0.8,
         review_threshold=0.5,
-        mailbox_url="http://mailbox",
-        mailbox_key="key",
+        digest_webhook_url="http://hooks.example/walls",
+        digest_webhook_token="key",
+        digest_to="you@example.com",
     )
 
 

@@ -129,21 +129,34 @@ def is_due(now: datetime) -> bool:
     return now.weekday() > 0 or now.time() >= SEND_HOUR
 
 
-async def send(settings: Settings, body: dict[str, Any], http: httpx.AsyncClient) -> str:
+def payload(settings: Settings, body: dict[str, Any]) -> dict[str, Any]:
+    message: dict[str, Any] = {"type": "DIGEST", "body": body}
+    if settings.digest_to:
+        message["to"] = [settings.digest_to]
+    return message
+
+
+async def send(settings: Settings, body: dict[str, Any], http: httpx.AsyncClient) -> str | None:
+    """POST the digest to the webhook. Returns the receiver's message_id when it gives one."""
+    token = settings.digest_webhook_token
     response = await http.post(
-        settings.mailbox_url.rstrip("/") + "/v1/messages",
-        json={"to": [settings.digest_to], "type": "DIGEST", "body": body},
-        headers={"Authorization": f"Bearer {settings.mailbox_key}"},
+        settings.digest_webhook_url,
+        json=payload(settings, body),
+        headers={"Authorization": f"Bearer {token}"} if token else {},
         timeout=20,
     )
     response.raise_for_status()
-    return response.json()["message_id"]
+    try:
+        message_id = response.json().get("message_id")
+    except (ValueError, AttributeError):
+        return None
+    return str(message_id) if message_id is not None else None
 
 
 async def run_if_due(
     db: Database, ai: AI, settings: Settings, http: httpx.AsyncClient, now: datetime
 ) -> str | None:
-    """Send this week's digest unless it went out already. Returns the mail id when it sends.
+    """Send this week's digest unless it went out already. Returns the ISO week when it sends.
     A failure leaves no row, so the next tick tries again."""
     if not is_due(now):
         return None
@@ -157,9 +170,10 @@ async def run_if_due(
             return None
     await refresh_remedies(db, ai, settings, now)
     body = compose(await collect(db, settings, now))
-    mail_id = await send(settings, body, http)
+    message_id = await send(settings, body, http)
     async with db.connect() as conn:
         await conn.execute(
-            "INSERT INTO digests (week, sent_at, mail_id) VALUES (%s, %s, %s)", (week, now, mail_id)
+            "INSERT INTO digests (week, sent_at, mail_id) VALUES (%s, %s, %s)",
+            (week, now, message_id),
         )
-    return mail_id
+    return week

@@ -9,7 +9,6 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 CONFIG_ENV = "WALLS_CONFIG"
 DEFAULT_CONFIG = Path("walls.toml")
-MAILBOX_SETTINGS = ("mailbox_url", "mailbox_key", "digest_to")
 
 # Where each setting sits in the config file. Its environment variable is WALLS_<NAME>, and an
 # environment variable wins over the file.
@@ -26,8 +25,8 @@ FILE_KEYS: dict[str, tuple[str, str]] = {
     "remedy_model": ("llm", "remedy_model"),
     "match_threshold": ("matching", "match_threshold"),
     "review_threshold": ("matching", "review_threshold"),
-    "mailbox_url": ("digest", "mailbox_url"),
-    "mailbox_key": ("digest", "mailbox_key"),
+    "digest_webhook_url": ("digest", "webhook_url"),
+    "digest_webhook_token": ("digest", "webhook_token"),
     "digest_to": ("digest", "to"),
     "timezone": ("digest", "timezone"),
     "digest_top": ("digest", "top"),
@@ -55,8 +54,8 @@ class Settings:
     remedy_model: str = "gpt-4.1-mini"
     match_threshold: float = 0.72
     review_threshold: float = 0.65
-    mailbox_url: str = ""
-    mailbox_key: str = ""
+    digest_webhook_url: str = ""
+    digest_webhook_token: str = ""
     digest_to: str = ""
     timezone: str = "UTC"
     digest_top: int = 5
@@ -94,13 +93,13 @@ class Settings:
             )
 
     def check_digest(self) -> None:
-        """Mailbox is optional, but half a Mailbox setup is a mistake worth stopping for."""
-        if any(getattr(self, name) for name in MAILBOX_SETTINGS):
-            self.require(*MAILBOX_SETTINGS)
+        """A digest token or recipient without a webhook to send to is a mistake worth stopping for."""
+        if self.digest_webhook_token or self.digest_to:
+            self.require("digest_webhook_url")
 
     @property
     def digest_enabled(self) -> bool:
-        return all(getattr(self, name) for name in MAILBOX_SETTINGS)
+        return bool(self.digest_webhook_url)
 
     @property
     def mcp_url(self) -> str:

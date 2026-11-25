@@ -68,12 +68,16 @@ def test_mistakes_stop_with_a_clear_message(tmp_path, text, message):
         Settings.load(write(tmp_path, text), env={})
 
 
-def test_mailbox_is_all_or_nothing():
+def test_digest_needs_only_a_webhook_url():
     Settings().check_digest()
     assert not Settings().digest_enabled
-    with pytest.raises(ConfigError, match="mailbox_key"):
-        Settings(mailbox_url="http://mailbox", digest_to="human:you").check_digest()
-    assert Settings(mailbox_url="m", mailbox_key="k", digest_to="t").digest_enabled
+    with pytest.raises(ConfigError, match="webhook_url"):
+        Settings(digest_to="you@example.com").check_digest()
+    with pytest.raises(ConfigError, match="WALLS_DIGEST_WEBHOOK_URL"):
+        Settings(digest_webhook_token="k").check_digest()
+    only_url = Settings(digest_webhook_url="http://hooks.example/walls")
+    only_url.check_digest()
+    assert only_url.digest_enabled
 
 
 def test_mcp_url():
