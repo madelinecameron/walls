@@ -5,10 +5,10 @@ import logging
 import secrets
 from pathlib import Path
 
-from . import digest, install
+from . import digest, install, tokens
 from .config import DEFAULT_CONFIG, ConfigError, Settings
 from .db import Database, migrate
-from .server import serve
+from .server import announce, serve
 
 CONFIG_TEMPLATE = """\
 # walls configuration. Every setting can also come from WALLS_<NAME> in the environment,
@@ -24,7 +24,9 @@ port = 8797
 # public_url = "https://walls.example.com/mcp"
 # Host headers to accept. Add your public name; "*" turns the check off.
 allowed_hosts = ["127.0.0.1:*", "localhost:*"]
-# Agents must send "Authorization: Bearer <auth_token>". Remove it to allow anyone.
+# Agents must send "Authorization: Bearer <auth_token>". Without auth_token, the server
+# makes one on first start, prints it once and keeps only its hash; `walls rotate-token`
+# replaces it. Set auth = false to let anyone in.
 @AUTH@
 
 [llm]
@@ -62,10 +64,30 @@ async def _preview(settings: Settings) -> None:
 def _init(path: Path, force: bool) -> None:
     if path.exists() and not force:
         raise ConfigError(f"{path} exists; pass --force to overwrite it")
-    generated = json.dumps(secrets.token_urlsafe(32))
-    path.write_text(CONFIG_TEMPLATE.replace("@AUTH@", f"auth_token = {generated}"))
+    token = secrets.token_urlsafe(32)
+    path.write_text(CONFIG_TEMPLATE.replace("@AUTH@", f"auth_token = {json.dumps(token)}"))
     path.chmod(0o600)
-    print(f"Wrote {path} with a new auth token. Fill in database_url and [llm].")
+    print(f"Wrote {path}. Fill in database_url and [llm].")
+    print(f"\nAuth token for agents (also in {path}):\n\n    {token}\n")
+
+
+async def _rotate(settings: Settings) -> str:
+    db = Database(settings.database_url)
+    await migrate(db)
+    return await tokens.rotate(db)
+
+
+def _rotate_token(settings: Settings) -> None:
+    if not settings.auth:
+        raise ConfigError("auth is off: the server takes no token")
+    if settings.auth_token:
+        raise ConfigError("auth_token is set in the config: change it there and restart")
+    settings.require("database_url")
+    announce(
+        asyncio.run(_rotate(settings)),
+        settings,
+        "Replaced the auth token. The old one no longer works.",
+    )
 
 
 def _install(args: argparse.Namespace, settings: Settings) -> None:
@@ -89,6 +111,10 @@ def parser() -> argparse.ArgumentParser:
     commands.add_parser("serve", help="run the MCP server")
     commands.add_parser("migrate", help="apply database migrations")
     commands.add_parser("digest-preview", help="print this week's digest without sending it")
+    commands.add_parser(
+        "rotate-token",
+        help="replace the generated auth token and print the new one; the old one stops working",
+    )
 
     init = commands.add_parser("init", help="write a starter config file with a new auth token")
     init.add_argument("path", nargs="?", type=Path, default=DEFAULT_CONFIG)
@@ -123,6 +149,8 @@ def main() -> None:
         serve(settings)
     elif args.command == "install":
         _install(args, settings)
+    elif args.command == "rotate-token":
+        _rotate_token(settings)
     else:
         settings.require("database_url")
         if args.command == "migrate":

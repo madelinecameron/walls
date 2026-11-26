@@ -1,5 +1,4 @@
 import asyncio
-import hmac
 import logging
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
@@ -16,7 +15,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 from starlette.types import ASGIApp, Receive, Scope, Send
 
-from . import digest, store
+from . import digest, store, tokens
 from .ai import AI
 from .config import Settings
 from .db import Database, migrate
@@ -178,14 +177,15 @@ def build_server(db: Database, ai: AI, settings: Settings, lifespan: Any = None)
 class BearerAuth:
     """Requires `Authorization: Bearer <token>` on every HTTP request except the health check."""
 
-    def __init__(self, app: ASGIApp, token: str) -> None:
+    def __init__(self, app: ASGIApp, check: tokens.Check) -> None:
         self.app = app
-        self.expected = f"Bearer {token}".encode()
+        self.check = check
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] == "http" and scope["path"] != "/healthz":
-            given = dict(scope["headers"]).get(b"authorization", b"")
-            if not hmac.compare_digest(given, self.expected):
+            header = dict(scope["headers"]).get(b"authorization", b"").decode("latin-1")
+            scheme, _, token = header.partition(" ")
+            if scheme.lower() != "bearer" or not token or not await self.check(token):
                 response = JSONResponse(
                     {"error": "missing or wrong bearer token"},
                     status_code=401,
@@ -196,13 +196,13 @@ class BearerAuth:
         await self.app(scope, receive, send)
 
 
-def http_app(server: MCPServer, settings: Settings) -> ASGIApp:
+def http_app(server: MCPServer, settings: Settings, check: tokens.Check | None = None) -> ASGIApp:
     hosts = settings.allowed_hosts
     security = TransportSecuritySettings(
         enable_dns_rebinding_protection="*" not in hosts, allowed_hosts=hosts
     )
     app = server.streamable_http_app(transport_security=security, host=settings.host)
-    return BearerAuth(app, settings.auth_token) if settings.auth_token else app
+    return BearerAuth(app, check) if check else app
 
 
 async def tick_loop(db: Database, ai: AI, settings: Settings, http: httpx.AsyncClient) -> None:
@@ -222,19 +222,42 @@ async def tick_loop(db: Database, ai: AI, settings: Settings, http: httpx.AsyncC
         await asyncio.sleep(TICK_SECONDS)
 
 
+def announce(token: str, settings: Settings, headline: str) -> None:
+    print(
+        f"\n{headline} Agents must send it as a bearer token:\n\n"
+        f"    {token}\n\n"
+        "Connect an agent with:\n\n"
+        f"    uvx --from git+https://github.com/madelinecameron/walls walls install claude \\\n"
+        f"      --url {settings.mcp_url} --token {token}\n\n"
+        "Save it now: it is not stored and won't be shown again.\n"
+        "If you lose it, `walls rotate-token` replaces it.\n",
+        flush=True,
+    )
+
+
+async def prepare(db: Database, settings: Settings) -> tokens.Check | None:
+    """Migrate, then settle how agents' tokens are checked. A token made now is printed once."""
+    await migrate(db)
+    if not settings.auth:
+        logger.warning("auth is off: anyone who can reach this server can use it")
+    elif not settings.auth_token:
+        token = await tokens.ensure(db)
+        if token:
+            announce(token, settings, "Generated an auth token.")
+    return tokens.checker(db, settings)
+
+
 def serve(settings: Settings) -> None:
     settings.require("database_url", "llm_url")
     settings.check_digest()
-    if not settings.auth_token:
-        logger.warning("no auth_token set: anyone who can reach this server can use it")
     if not settings.digest_enabled:
         logger.info("no digest webhook_url set: the weekly digest is off")
     db = Database(settings.database_url)
+    check = asyncio.run(prepare(db, settings))
     ai = AI(settings.llm_url, settings.llm_key, settings.embedding_model, settings.remedy_model)
 
     @asynccontextmanager
     async def lifespan(_: MCPServer) -> AsyncGenerator[None]:
-        await migrate(db)
         http = httpx.AsyncClient()
         task = asyncio.create_task(tick_loop(db, ai, settings, http))
         try:
@@ -244,5 +267,5 @@ def serve(settings: Settings) -> None:
             await http.aclose()
             await ai.aclose()
 
-    app = http_app(build_server(db, ai, settings, lifespan=lifespan), settings)
+    app = http_app(build_server(db, ai, settings, lifespan=lifespan), settings, check)
     uvicorn.run(app, host=settings.host, port=settings.port)

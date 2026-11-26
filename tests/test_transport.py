@@ -13,6 +13,7 @@ from mcp.client.streamable_http import streamable_http_client
 from mcp.shared._httpx_utils import create_mcp_http_client
 from mcp.types import Implementation
 
+from walls import tokens
 from walls.server import build_server, http_app
 
 TOKEN = "test-token-0123456789"
@@ -26,7 +27,7 @@ def free_port() -> int:
 
 async def start(db, ai, settings):
     port = free_port()
-    app = http_app(build_server(db, ai, settings), settings)
+    app = http_app(build_server(db, ai, settings), settings, tokens.checker(db, settings))
     server = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=port, log_level="warning"))
     task = asyncio.create_task(server.serve())
     while not server.started:
@@ -37,7 +38,7 @@ async def start(db, ai, settings):
 @pytest.fixture
 async def url(db, ai, settings):
     hosts = ["walls.example.com", "127.0.0.1:*"]
-    server, task, address = await start(db, ai, replace(settings, allowed_hosts=hosts))
+    server, task, address = await start(db, ai, replace(settings, allowed_hosts=hosts, auth=False))
     yield address
     server.should_exit = True
     await task
@@ -134,7 +135,7 @@ async def test_a_client_with_the_token_gets_through(guarded_url, db):
     assert result["status"] == "logged"
 
 
-async def test_no_token_means_no_check(url):
+async def test_auth_off_means_no_check(url):
     async with httpx.AsyncClient() as http:
         response = await http.post(f"{url}/mcp", json=PING, headers=ACCEPT)
     assert response.status_code != 401
